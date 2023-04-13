@@ -5,6 +5,7 @@ from discord.ext import commands
 from riotwatcher import LolWatcher, ApiError
 from bs4 import BeautifulSoup
 import requests
+from requests.exceptions import HTTPError
 from util import get_most_played_champion
 from collections import defaultdict
 
