@@ -112,7 +112,7 @@ async def check_summoners(ctx):
         region = 'kr' # 기본 region을 'kr'으로 설정
         response = ""
         for summoner_name in summoner_list:
-            summoner = await lol_watcher.summoner.by_name(region, summoner_name)
+            summoner = await lol_watcher.summoner.by_name_async(region, summoner_name)
             summoner_puuid = summoner['puuid']
             most_played_champ = await get_most_played_champion(lol_watcher, summoner_puuid, region)
             solo_rank = None
