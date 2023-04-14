@@ -1,23 +1,15 @@
-import discord
 import os
-import random
+import discord
 from discord.ext import commands
-from riotwatcher import LolWatcher, ApiError
-from bs4 import BeautifulSoup
-import requests
-from requests.exceptions import HTTPError
-from util import get_most_played_champion
-from util import parse_summoner_info
-from collections import defaultdict
+from dotenv import load_dotenv
+from util import *
 
-DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
-RIOT_API_KEY = os.environ.get('RIOT_API_KEY')
+load_dotenv()
+RIOT_API_KEY = os.getenv('RIOT_API_KEY')
+DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
-lol_watcher = LolWatcher(RIOT_API_KEY)
 intents = discord.Intents.default()
 intents.message_content = True
-
-summoner_list = []
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -28,158 +20,109 @@ class MyBot(commands.Bot):
             application_id=1036275674694037594
         )
 
+        self.summoners_list = []
+        self.db = {} # Assuming this is your database connection
+
     async def on_ready(self):
-        print("ready!")
-        activity = discord.Game("상태 메세지")
-        await self.change_presence(status=discord.Status.online, activity=activity)
-
-async def create_teams(ctx: commands.Context, summoners: list) -> None:
-    if len(summoners) < 10:
-        await ctx.send("10명 이상의 소환사를 입력해주세요.")
-        return
-
-    team_size = len(summoners) // 2 if len(summoners) < 15 else len(summoners) // 3 if len(summoners) < 20 else len(summoners) // 4
-    if len(summoners) % team_size != 0:
-        await ctx.send(f"{team_size}의 배수인 소환사를 입력해주세요.")
-        return
-
-    team_list = []
-    for i in range(team_size):
-        team_list.append([])
-
-    for i, summoner_name in enumerate(summoners):
-        try:
-            summoner = lol_watcher.summoner.by_name('kr', summoner_name)
-            league_entries = lol_watcher.league.by_summoner('kr', summoner['id'])
-            solo_rank = None
-            flex_rank = None
-
-            for entry in league_entries:
-                if entry['queueType'] == 'RANKED_SOLO_5x5':
-                    solo_rank = entry
-                elif entry['queueType'] == 'RANKED_FLEX_SR':
-                    flex_rank = entry
-
-            if solo_rank:
-                tier = solo_rank['tier']
-                rank = solo_rank['rank']
-                lp = solo_rank['leaguePoints']
-                team_list[i % team_size].append(f"{summoner_name} ({tier} {rank}, {lp} LP)")
-            elif flex_rank:
-                tier = flex_rank['tier']
-                rank = flex_rank['rank']
-                lp = flex_rank['leaguePoints']
-                team_list[i % team_size].append(f"{summoner_name} ({tier} {rank}, {lp} LP)")
-            else:
-                tier, rank = get_last_season_tier(summoner_name)
-                team_list[i % team_size].append(f"{summoner_name} ({tier} {rank}, 언랭)")
-
-        except ApiError as err:
-            print(f'잘못된 소환사명입니다: {summoner_name}')
-
-    response = ""
-    for i, team in enumerate(team_list):
-        response += f"team{i+1}: {', '.join(team)}\n"
-
-    await ctx.send(response)
-
-def get_last_season_tier(summoner_name):
-    opgg_url = f'https://www.op.gg/summoner/userName={summoner_name.replace(" ", "+")}'
-    response = requests.get(opgg_url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    last_season_tier = soup.find('div', {'class': 'PastRankList'})
-    if last_season_tier is None:
-        return "언랭", "I"
-
-    tier_and_rank = last_season_tier.find('div', {'class': 'TierRank'}).text.strip()
-    tier, rank = tier_and_rank.split()
-
-    return tier, rank
+        print(f'We have logged in as {self.user}')
 
 bot = MyBot()
 
-@bot.command(name="소환사등록")
-async def register_summoner(ctx: commands.Context, *, summoner_name: str) -> None:
-    global summoner_list
-    summoner_list.append(summoner_name)
-    await ctx.send(f"{summoner_name} 등록 완료! 현재 소환사 목록: {', '.join(summoner_list)}")
+# Updated command
+@bot.command()
+async def 소환사추가(ctx, *summoner_name: str):
+    summoner_name = ' '.join(summoner_name)
+    summoner_info = get_summoner_info(summoner_name, RIOT_API_KEY)
+    if summoner_info:
+        bot.summoners_list.append(summoner_info)
+        await ctx.send(f"소환사 {summoner_name}이(가) 추가되었습니다.")
+    else:
+        await ctx.send(f"소환사 {summoner_name}을(를) 찾을 수 없습니다.")
 
-@bot.command(name="팀짜기")
-async def create_teams_command(ctx: commands.Context) -> None:
-    await create_teams(ctx, summoner_list)
+# Updated command
+@bot.command()
+async def 소환사등록(ctx, summoner_name: str):
+    summoner_info = get_summoner_info(summoner_name, RIOT_API_KEY)
+    if summoner_info:
+        bot.db[summoner_name] = summoner_info
+        await ctx.send(f"소환사 {summoner_name}이(가) 등록되었습니다.")
+    else:
+        await ctx.send(f"소환사 {summoner_name}을(를) 찾을 수 없습니다.")
 
-@bot.command(name='확인하기')
-async def check_summoners(ctx):
-    try:
-        region = 'kr' # 기본 region을 'kr'으로 설정
-        response = ""
-        for summoner_name in summoner_list:
-            summoner = await lol_watcher.summoner.by_name(region, summoner_name)
-            summoner_puuid = summoner.puuid
-            most_played_champ = await get_most_played_champion(lol_watcher, summoner_puuid, region)
-            solo_rank = None
-            flex_rank = None
+# Updated command
+@bot.command()
+async def 확인하기(ctx):
+    if not bot.summoners_list:
+        await ctx.send("추가된 소환사가 없습니다.")
+        return
 
-            league_entries = lol_watcher.league.by_summoner(region, summoner['id'])
-            for entry in league_entries:
-                if entry['queueType'] == 'RANKED_SOLO_5x5':
-                    solo_rank = entry
-                elif entry['queueType'] == 'RANKED_FLEX_SR':
-                    flex_rank = entry
-            
-            if solo_rank:
-                tier = solo_rank['tier']
-                rank = solo_rank['rank']
-                lp = solo_rank['leaguePoints']
-                response += f"{summoner_name}: {tier} {rank}, {lp} LP, {most_played_champ}\n"
-            elif flex_rank:
-                tier = flex_rank['tier']
-                rank = flex_rank['rank']
-                lp = flex_rank['leaguePoints']
-                response += f"{summoner_name}: {tier} {rank}, {lp} LP, {most_played_champ}\n"
-            else:
-                tier, rank = get_last_season_tier(summoner_name)
-                response += f"{summoner_name}: {tier} {rank}, 언랭, {most_played_champ}\n"
+    embed = discord.Embed(title="소환사 정보", color=0x00ff00)
+    for summoner in bot.summoners_list:
+        embed.add_field(name=f"{summoner['name']} - {summoner['tier']} {summoner['rank']}",
+                        value=f"Level: {summoner['level']}\nOP.GG: {summoner['opgg_url']}",
+                        inline=False)
+    await ctx.send(embed=embed)
 
-        embed = discord.Embed(title="소환사 정보", description=response, color=0xFF5733)
+tier_colors = {
+    "IRON": 0x5D5D5D,
+    "BRONZE": 0x824A02,
+    "SILVER": 0x8C8C8C,
+    "GOLD": 0xD4AF37,
+    "PLATINUM": 0x0FB9B1,
+    "DIAMOND": 0x1774FF,
+    "MASTER": 0x9437D4,
+    "GRANDMASTER": 0xE23B3B,
+    "CHALLENGER": 0x1D8FE1,  # 새로운 색상 코드로 변경
+}
+
+@bot.command()
+async def 팀짜기(ctx):
+    teams = balance_teams(bot.summoners_list)
+    
+    if not teams:
+        await ctx.send("팀을 짤 수 없습니다.")
+        return
+    
+    global recent_teams
+    recent_teams.append(teams)
+    team_color = [tier_colors[team[0]['tier']] for team in teams]
+
+    for i, (team, color) in enumerate(zip(teams, team_color)):
+        summoners_str = ", ".join([f"{summoner['name']} - {summoner['tier']} {summoner['rank']}" for summoner in team])
+        avg_tier = get_average_tier([summoner['tier'] for summoner in team], [summoner['rank'] for summoner in team])
+        embed = discord.Embed(title=f"TEAM {i + 1}", description=summoners_str, color=color)
+        embed.add_field(name="주목해야 할 소환사", value=f"{team[0]['name']} - {team[0]['tier']} {team[0]['rank']}", inline=False)
+        embed.add_field(name="평균 티어", value=avg_tier, inline=False)
         await ctx.send(embed=embed)
-    except HTTPError as err:
-        if err.response.status_code == 429:
-            await ctx.send('죄송합니다. API 요청 한도를 초과하였습니다. 잠시 후 다시 시도해주세요.')
-        else:
-            await ctx.send(f'죄송합니다. 오류가 발생했습니다: {err}')
 
-@bot.command(name="help")
-async def help_command(ctx: commands.Context):
-    help_message = '''
-    사용 가능한 명령어:
-    !소환사등록 "닉네임"
-    - 소환사를 목록에 추가합니다.
-    !확인하기
-    - 현재 등록된 소환사들의 이름과 간략한 정보 (티어와 랭크, 주로 사용하는 챔피언과 포지션)를 출력합니다.
-    !팀짜기
-    - 소환사 목록을 기반으로 균형있는 팀을 생성합니다. 팀은 최소 10명일 때 2팀, 15명일 때 3팀, 20명일 때 4팀으로 나뉩니다.
-    '''
-    await ctx.send(help_message)    
+# New help command
+@bot.command()
+async def help(ctx):
+    help_embed = discord.Embed(title="도움말", description="사용 가능한 명령어 목록입니다.", color=0x00ff00)
+    help_embed.add_field(name="!소환사추가 [소환사 이름]",
+                         value="소환사를 리스트에 저장합니다.\nex) !소환사추가 hide on bush",
+                         inline=False)
+    help_embed.add_field(name="!소환사등록 [소환사 이름]",
+                         value="소환사를 데이터베이스에 저장합니다.\nex) !소환사등록 hide on bush",
+                         inline=False)
+    help_embed.add_field(name="!확인하기",
+                         value="추가된 소환사들의 정보를 확인합니다.",
+                         inline=False)
+    help_embed.add_field(name="!팀짜기",
+                         value="추가된 소환사들을 바탕으로 내전 팀을 구성합니다.",
+                         inline=False)
+    await ctx.send(embed=help_embed)
 
-try:
-    bot.add_command(register_summoner)
-except discord.ext.commands.errors.CommandRegistrationError:
-    pass
-
-try:
-    bot.add_command(create_teams_command)
-except discord.ext.commands.errors.CommandRegistrationError:
-    pass
-
-try:
-    bot.add_command(help_command)
-except discord.ext.commands.errors.CommandRegistrationError:
-    pass
-
-try:
-    bot.add_command(check_summoners)
-except discord.ext.commands.errors.CommandRegistrationError:
-    pass
+@bot.command()
+async def 평가하기(ctx, evaluation: float):
+    global team_evaluator
+    
+    teams = find_recent_teams()
+    input_vector = teams_to_input_vector(teams)
+    
+    x_train = np.array([input_vector])
+    y_train = np.array([evaluation])
+    train_team_evaluator(team_evaluator, x_train, y_train)
+    await ctx.send("팀 평가를 기반으로 AI를 업데이트했습니다.")
 
 bot.run(DISCORD_BOT_TOKEN)

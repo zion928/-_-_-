@@ -2,6 +2,26 @@ import requests
 from riotwatcher import LolWatcher, ApiError
 from bs4 import BeautifulSoup
 from typing import List, Dict, Union, Optional
+import itertools
+import random
+from LMBlearn import create_team_evaluator, train_team_evaluator, evaluate_teams
+
+recent_teams = []
+
+def find_recent_teams() -> List[List[Dict[str, Union[str, int]]]]:
+    return recent_teams[-1]
+
+def teams_to_input_vector(teams: List[List[Dict[str, Union[str, int]]]]) -> np.ndarray:
+    input_vector = []
+    
+    for team in teams:
+        for summoner in team:
+            input_vector.append(summoner['mmr'])
+            # 각 소환사의 선호 포지션은 다음과 같이 벡터로 나타낼 수 있습니다.
+            # [Top, Jungle, Mid, ADC, Support]
+            input_vector.extend(summoner['preferred_position'])
+    
+    return np.array(input_vector)
 
 def get_summoner_info(summoner_name: str, api_key: str) -> Union[Dict, None]:
     summoner_name = summoner_name.replace(" ", "")
@@ -61,15 +81,12 @@ def get_ranked_stats(lol_watcher: LolWatcher, region: str, summoner_id: str) -> 
     return 'UNRANKED', None
 
 def balance_teams(summoners_list: List[Dict[str, Union[str, int]]]) -> List[List[Dict[str, Union[str, int]]]]:
-    sorted_summoners = sorted(
-        summoners_list, key=lambda summoner: tier_rank_to_value(summoner["tier"], summoner["rank"]), reverse=True
-    )
-    
-    num_teams = 2  # Change this to the desired number of teams
+    num_teams = len(summoners_list) // 5
+    sorted_summoners = sorted(summoners_list, key=lambda x: tier_rank_to_value(x['tier'], x['rank']), reverse=True)
     teams = [[] for _ in range(num_teams)]
 
-    for idx, summoner in enumerate(sorted_summoners):
-        teams[idx % num_teams].append(summoner)
+    for i, summoner in enumerate(sorted_summoners):
+        teams[i % num_teams].append(summoner)
 
     return teams
 
@@ -134,21 +151,21 @@ def get_normal_game_mmr(summoner_name: str) -> Optional[int]:
 
     return mmr
 
-def get_average_tier(tiers: List[str]) -> str:
-    # 각 티어의 값을 리스트로 변환합니다.
-    values = [tier_rank_to_value(tier, "IV") for tier in tiers]
-    
-    # 평균 값을 계산합니다.
-    avg_value = sum(values) / len(values)
-    
-    # 평균 값에 해당하는 티어와 랭크를 반환합니다.
-    return value_to_tier_rank(int(avg_value))
+def get_average_tier(tiers: List[str], ranks: List[str]) -> str:
+    total_value = 0
+    num_summoners = len(tiers)
+    for tier, rank in zip(tiers, ranks):
+        total_value += tier_rank_to_value(tier, rank)
 
-def get_max_tier_and_rank(tiers: List[str], ranks: List[str]) -> tuple[str, str, int]:
+    average_value = total_value // num_summoners
+    average_tier, average_rank = value_to_tier_rank(average_value)
+
+    return f"{average_tier} {average_rank}"
+
+def get_max_tier_and_rank(tiers: List[str], ranks: List[str]) -> tuple[str, str]:
     max_value = -1
     max_tier = ""
     max_rank = ""
-    max_score = 0
 
     for tier, rank in zip(tiers, ranks):
         value = tier_rank_to_value(tier, rank)
@@ -156,9 +173,8 @@ def get_max_tier_and_rank(tiers: List[str], ranks: List[str]) -> tuple[str, str,
             max_value = value
             max_tier = tier
             max_rank = rank
-            max_score = value
 
-    return max_tier, max_rank, max_score
+    return max_tier, max_rank
 
 def value_to_tier_rank(value: int) -> str:
     # 각 티어의 값 범위를 딕셔너리로 정의합니다.
