@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import requests
 from requests.exceptions import HTTPError
 from util import get_most_played_champion
+from util import parse_summoner_info
 from collections import defaultdict
 
 DISCORD_BOT_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
@@ -17,6 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 summoner_list = []
+
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(
@@ -112,8 +114,8 @@ async def check_summoners(ctx):
         region = 'kr' # 기본 region을 'kr'으로 설정
         response = ""
         for summoner_name in summoner_list:
-            summoner = await lol_watcher.summoner.by_name_async(region, summoner_name)
-            summoner_puuid = summoner['puuid']
+            summoner = await lol_watcher.summoner.by_name(region, summoner_name)
+            summoner_puuid = summoner.puuid
             most_played_champ = await get_most_played_champion(lol_watcher, summoner_puuid, region)
             solo_rank = None
             flex_rank = None
